@@ -28,6 +28,12 @@ matches the same quadratic law.
 - The provided `IJERT_May26_Sahil.pdf` was briefly extracted with `pypdf` to
   confirm the paper's framing and quadratic-bias hypothesis. The PDF was left
   unmodified and remains untracked.
+- User later reported a `git push` non-fast-forward rejection followed by
+  `git pull origin` and a successful second `git push`.
+- User attached a smoke-test run log showing that PPO training completed but
+  `--total-timesteps 5000` ran to 6,144 timesteps because Stable-Baselines3
+  rounded up to full 2,048-step rollouts. The analysis completed, but the
+  log-log plot was skipped because the smoke test used only one nonzero sigma.
 
 ## Work Accomplished
 
@@ -63,6 +69,16 @@ matches the same quadratic law.
   `make_plots.generate_all_plots`; the fit/plot path succeeded. Training-curve
   plotting was skipped in that synthetic test because no PPO logs existed.
 - Cleaned up temporary smoke-test outputs and generated `__pycache__` files.
+- Checked Git state after the reported push issue. Local `main` and
+  `origin/main` both point to commit `ddf304f`, and the working tree is clean.
+- Added an exact timestep stop callback to PPO training so short runs stop at
+  the requested timestep budget.
+- Added training CLI overrides for `--n-steps`, `--batch-size`, and
+  `--n-epochs` to make smoke tests much faster without changing the full
+  research defaults.
+- Updated README smoke-test commands to use sigma values `0.0 0.1 0.2` and
+  lightweight PPO settings so the log-log plot has at least two positive sigma
+  points.
 
 ## Key Decisions
 
@@ -92,3 +108,10 @@ matches the same quadratic law.
 - Inspect `results/fit_statistics.csv` to determine whether learned PPO
   advantage bias is quadratic and whether PPO performance drop has exponent
   near 2 or differs from the analytical GAE law.
+- No Git repair is currently needed for the reported push issue; future
+  non-fast-forward rejections should be handled by pulling/rebasing remote
+  changes before pushing.
+- Re-run the smoke test with:
+  `python run_training.py --sigmas 0.0 0.1 0.2 --total-timesteps 5000 --n-steps 512 --n-epochs 2`
+  followed by:
+  `python run_analysis.py --sigmas 0.0 0.1 0.2 --eval-episodes 3 --gae-episodes 5`.

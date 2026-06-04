@@ -148,8 +148,13 @@ Models are saved automatically under `models/`.
 For a quick smoke test:
 
 ```bash
-python run_training.py --sigmas 0.0 0.1 --total-timesteps 5000
+python run_training.py --sigmas 0.0 0.1 0.2 --total-timesteps 5000 --n-steps 512 --n-epochs 2
 ```
+
+The smaller rollout length and epoch count make the smoke test much faster than
+the full research configuration. The training runner also stops at the requested
+timestep budget instead of letting Stable-Baselines3 round up to the next full
+rollout.
 
 ## Run Analysis
 
@@ -169,8 +174,11 @@ This writes:
 For faster analysis while debugging:
 
 ```bash
-python run_analysis.py --sigmas 0.0 0.1 --eval-episodes 3 --gae-episodes 5
+python run_analysis.py --sigmas 0.0 0.1 0.2 --eval-episodes 3 --gae-episodes 5
 ```
+
+Use at least two nonzero sigma values if you want the log-log bias plot to be
+generated during a smoke test.
 
 ## Generate Figures
 

@@ -19,6 +19,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override default PPO timesteps. Default is 1,000,000.",
     )
+    parser.add_argument(
+        "--n-steps",
+        type=int,
+        default=None,
+        help="Override PPO rollout length. Useful for fast smoke tests.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override PPO minibatch size. Must be <= n_steps.",
+    )
+    parser.add_argument(
+        "--n-epochs",
+        type=int,
+        default=None,
+        help="Override PPO optimization epochs per rollout.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -31,7 +49,13 @@ def main() -> None:
         level=getattr(logging, args.log_level.upper()),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    train_all_sigmas(sigmas=args.sigmas, total_timesteps=args.total_timesteps)
+    train_all_sigmas(
+        sigmas=args.sigmas,
+        total_timesteps=args.total_timesteps,
+        n_steps=args.n_steps,
+        batch_size=args.batch_size,
+        n_epochs=args.n_epochs,
+    )
 
 
 if __name__ == "__main__":

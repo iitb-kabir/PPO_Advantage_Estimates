@@ -55,6 +55,21 @@ class TrainingMetricsCallback(BaseCallback):
         return True
 
 
+class StopAtTimestepsCallback(BaseCallback):
+    """Stop training once an exact timestep budget has been reached."""
+
+    def __init__(self, max_timesteps: int) -> None:
+        """Initialize the exact timestep stopper."""
+
+        super().__init__()
+        self.max_timesteps = max_timesteps
+
+    def _on_step(self) -> bool:
+        """Return ``False`` when training should stop."""
+
+        return self.num_timesteps < self.max_timesteps
+
+
 def seed_everything(seed: int) -> None:
     """Seed Python, NumPy, PyTorch, and Stable-Baselines3."""
 
@@ -81,10 +96,23 @@ def create_ppo_model(
     sigma: float,
     config: ExperimentConfig = CONFIG,
     seed_offset: int = 0,
+    n_steps: int | None = None,
+    batch_size: int | None = None,
+    n_epochs: int | None = None,
 ) -> PPO:
     """Create a PPO model for one turbulence level."""
 
     seed = config.ppo.seed + seed_offset
+    active_n_steps = n_steps or config.ppo.n_steps
+    active_batch_size = batch_size or config.ppo.batch_size
+    active_n_epochs = n_epochs or config.ppo.n_epochs
+    if active_n_steps < 2:
+        raise ValueError("PPO n_steps must be at least 2")
+    if active_batch_size < 2:
+        raise ValueError("PPO batch_size must be at least 2")
+    if active_batch_size > active_n_steps:
+        raise ValueError("PPO batch_size must be less than or equal to n_steps")
+
     log_dir = training_log_dir(sigma, config)
     log_dir.mkdir(parents=True, exist_ok=True)
     vec_env = make_vec_env(
@@ -106,9 +134,9 @@ def create_ppo_model(
         gamma=config.ppo.gamma,
         gae_lambda=config.ppo.gae_lambda,
         learning_rate=config.ppo.learning_rate,
-        n_steps=config.ppo.n_steps,
-        batch_size=config.ppo.batch_size,
-        n_epochs=config.ppo.n_epochs,
+        n_steps=active_n_steps,
+        batch_size=active_batch_size,
+        n_epochs=active_n_epochs,
         clip_range=config.ppo.clip_range,
         ent_coef=config.ppo.ent_coef,
         vf_coef=config.ppo.vf_coef,
@@ -127,29 +155,48 @@ def train_single_sigma(
     config: ExperimentConfig = CONFIG,
     total_timesteps: int | None = None,
     seed_offset: int = 0,
+    n_steps: int | None = None,
+    batch_size: int | None = None,
+    n_epochs: int | None = None,
 ) -> Path:
     """Train and save one PPO model for a turbulence level."""
 
     config.ensure_directories()
     seed = config.ppo.seed + seed_offset
     seed_everything(seed)
+    active_total_timesteps = total_timesteps or config.ppo.total_timesteps
+    active_n_steps = n_steps or config.ppo.n_steps
     log_dir = training_log_dir(sigma, config)
     checkpoint_dir = log_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    LOGGER.info("Training PPO for sigma=%.2f with seed=%d", sigma, seed)
-    model = create_ppo_model(sigma=sigma, config=config, seed_offset=seed_offset)
+    LOGGER.info(
+        "Training PPO for sigma=%.2f with seed=%d, timesteps=%d, n_steps=%d",
+        sigma,
+        seed,
+        active_total_timesteps,
+        active_n_steps,
+    )
+    model = create_ppo_model(
+        sigma=sigma,
+        config=config,
+        seed_offset=seed_offset,
+        n_steps=n_steps,
+        batch_size=batch_size,
+        n_epochs=n_epochs,
+    )
     metrics_callback = TrainingMetricsCallback(sigma=sigma)
+    stop_callback = StopAtTimestepsCallback(max_timesteps=active_total_timesteps)
     checkpoint_callback = CheckpointCallback(
-        save_freq=max(config.ppo.n_steps, 10_000),
+        save_freq=max(active_n_steps, 10_000),
         save_path=str(checkpoint_dir),
         name_prefix=f"ppo_uav_sigma_{sigma:.2f}".replace(".", "_"),
         save_replay_buffer=False,
         save_vecnormalize=False,
     )
     model.learn(
-        total_timesteps=total_timesteps or config.ppo.total_timesteps,
-        callback=[metrics_callback, checkpoint_callback],
+        total_timesteps=active_total_timesteps,
+        callback=[metrics_callback, checkpoint_callback, stop_callback],
         progress_bar=True,
     )
 
@@ -168,6 +215,9 @@ def train_all_sigmas(
     config: ExperimentConfig = CONFIG,
     sigmas: list[float] | None = None,
     total_timesteps: int | None = None,
+    n_steps: int | None = None,
+    batch_size: int | None = None,
+    n_epochs: int | None = None,
 ) -> list[Path]:
     """Train one PPO model for each requested turbulence level."""
 
@@ -180,6 +230,9 @@ def train_all_sigmas(
                 config=config,
                 total_timesteps=total_timesteps,
                 seed_offset=index,
+                n_steps=n_steps,
+                batch_size=batch_size,
+                n_epochs=n_epochs,
             )
         )
     return saved_paths
@@ -191,6 +244,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sigmas", nargs="*", type=float, default=None)
     parser.add_argument("--total-timesteps", type=int, default=None)
+    parser.add_argument("--n-steps", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--n-epochs", type=int, default=None)
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -200,7 +256,13 @@ def main() -> None:
 
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper()))
-    train_all_sigmas(sigmas=args.sigmas, total_timesteps=args.total_timesteps)
+    train_all_sigmas(
+        sigmas=args.sigmas,
+        total_timesteps=args.total_timesteps,
+        n_steps=args.n_steps,
+        batch_size=args.batch_size,
+        n_epochs=args.n_epochs,
+    )
 
 
 if __name__ == "__main__":
