@@ -6,6 +6,16 @@ __pycache__/
 results_table.csv
 regression_stats.txt
 critical_threshold.txt
+models/*.zip
+models/**/*.zip
+results/*.csv
+results/training_logs/
+figures/fig_advantage_bias_vs_sigma.*
+figures/fig_ppo_return_vs_sigma.*
+figures/fig_advantage_bias_vs_return.*
+figures/fig_loglog_bias.*
+figures/fig_residual_analysis.*
+figures/fig_training_curves.*
 
 # LaTeX build artifacts
 *.aux

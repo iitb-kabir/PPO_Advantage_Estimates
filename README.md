@@ -1,155 +1,224 @@
-# Quadratic Degradation of PPO Advantage Estimates Under Aerodynamic Disturbances
+# PPO Advantage Bias Under UAV Turbulence
 
-Reproduction code for the paper:
+This repository studies whether PPO performance degradation under UAV
+turbulence follows the same quadratic scaling law previously observed for
+Generalized Advantage Estimation (GAE) bias.
 
-> **A Quadratic Bound on PPO Advantage Bias Under UAV Turbulence**
-> Sahil Patil, Nasiruddin Kabir — Dept. of Aerospace Engineering, IIT Bombay
+The original NumPy/SciPy experiment is still available in `run_experiment.py`.
+It uses a linear UAV model, an LQR controller, the exact Riccati value function,
+and Monte Carlo simulations to show that advantage-estimation error scales as
+`C sigma^2`. The repository now also contains a complete Stable-Baselines3 PPO
+training and analysis pipeline for testing the same hypothesis with learned
+policies.
 
-This repository contains a fully self-contained NumPy/SciPy experiment that
-measures how the Generalized Advantage Estimation (GAE) bias of a PPO-style
-critic degrades as the intensity $\sigma$ of an aerodynamic crosswind
-disturbance increases. The headline result is that the bias grows
-**quadratically** in $\sigma$ — a direct consequence of pairing a quadratic
-(LQR) value function with a zero-mean disturbance — and the experiment
-confirms this with $R^2 = 0.9999$ and a fitted power-law exponent of $1.93$.
+## Research Question
 
----
+Does PPO performance degradation under turbulence follow the same quadratic law
+as GAE bias?
 
-## Key result
+The framework trains independent PPO policies for:
 
-The measured GAE bias follows $\;\mathbb{E}[\bar{\Delta}(\sigma)] = 29.13\,\sigma^2\;$
-across eleven disturbance levels and 33,000 Monte-Carlo trial pairs.
+```text
+sigma = [0.00, 0.05, 0.10, 0.20, 0.30, 0.50, 0.80, 1.00]
+```
 
-![Quadratic fit vs linear fit](figures/fig_mainfit.png)
+For each turbulence level it measures:
 
-A linear-in-$\sigma$ model ($R^2 = 0.918$) is mis-specified: it overshoots at
-mid-range $\sigma$ and extrapolates to an unphysical negative bias at
-$\sigma = 0$. The quadratic model ($R^2 = 0.9999$) tracks the data everywhere.
+- Average episode return
+- Success rate
+- Policy loss
+- Value loss
+- Approximate KL divergence
+- Manual GAE advantage bias
 
-The log–log plot gives a fit-independent confirmation of the exponent: a power
-law $\sigma^p$ is a straight line of slope $p$, and the measured slope is
-$1.93$, matching the slope-2 reference.
+It then fits:
 
-![Log-log scaling](figures/fig_loglog.png)
+- `Bias = C sigma^2`
+- `Performance Drop = K sigma^p`
 
-The residuals make the model comparison explicit — the linear model leaves a
-systematic U-shaped residual pattern, while the quadratic residuals are small
-and unstructured.
+and reports `C`, `R^2`, `K`, and the performance exponent `p`.
 
-![Residuals](figures/fig_residuals.png)
+## Environment
 
----
+The Gymnasium environment is `envs/uav_env.py::UAVTurbulenceEnv`.
 
-## Repository contents
+State:
 
-| File | Description |
-|------|-------------|
-| `run_experiment.py` | Main experiment: solves the DARE, runs the Monte-Carlo trials, fits the quadratic model, computes the critical threshold, and writes the output files. |
-| `make_plots.py` | Generates the three figures above from the experiment data. |
-| `paper_corrected.tex` | LaTeX source of the paper (IEEEtran conference format). |
-| `figures/` | Pre-rendered figures (`.png`). |
-| `requirements.txt` | Python dependencies. |
+```text
+[x, vx, y, vy]
+```
 
-Running the code also produces three output files:
+Action:
 
-- `results_table.csv` — Table I in the paper
-- `regression_stats.txt` — regression statistics ($C_{\text{emp}}$, $R^2$, exponent, etc.)
-- `critical_threshold.txt` — critical disturbance thresholds $\sigma^*(f)$
+```text
+[ax, ay]
+```
 
----
+Dynamics:
 
-## Requirements
+```text
+s_{t+1} = A s_t + B a_t + E w_t
+w_t ~ N(0, sigma^2)
+```
 
-- Python 3.10+
-- NumPy
-- SciPy
-- Matplotlib (only needed for `make_plots.py`)
+The matrices match the original double-integrator experiment:
 
-Install everything with:
+```text
+A = [[1, dt, 0,  0 ],
+     [0, 1,  0,  0 ],
+     [0, 0,  1,  dt],
+     [0, 0,  0,  1 ]]
+
+B = [[0,  0 ],
+     [dt, 0 ],
+     [0,  0 ],
+     [0,  dt]]
+
+E = [0, 0, 0, 1]
+```
+
+Reward:
+
+```text
+r = -(s^T Q s + a^T R a)
+Q = I
+R = 0.1 I
+```
+
+Episode length is 200 steps.
+
+## Repository Structure
+
+```text
+.
+|-- envs/
+|   |-- __init__.py
+|   `-- uav_env.py
+|-- training/
+|   |-- __init__.py
+|   `-- train_ppo.py
+|-- analysis/
+|   |-- __init__.py
+|   |-- compute_gae_bias.py
+|   |-- evaluate_models.py
+|   `-- fit_models.py
+|-- figures/
+|-- models/
+|-- results/
+|-- config.py
+|-- run_training.py
+|-- run_analysis.py
+|-- run_experiment.py
+|-- make_plots.py
+|-- README.md
+`-- requirements.txt
+```
+
+## Installation
+
+Use Python 3.10 or newer.
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
+The implementation is CPU-compatible. Stable-Baselines3 will use `device="cpu"`
+by default.
 
-## How to run
+## Train PPO Models
 
-**1. Reproduce the numerical results** (seed 0, as in the paper):
-
-```bash
-python run_experiment.py
-```
-
-This prints progress to the console and writes `results_table.csv`,
-`regression_stats.txt`, and `critical_threshold.txt`. It runs in well under an
-hour on a standard laptop CPU; no GPU is required.
-
-You can change the configuration via command-line flags:
+Run the full research training sweep:
 
 ```bash
-python run_experiment.py --seed 0 --n_trials 3000 --T 20 --gamma 0.99 --lam 0.95
+python run_training.py
 ```
 
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--seed` | `0` | Random seed |
-| `--n_trials` | `3000` | Monte-Carlo trial pairs per $\sigma$ level |
-| `--T` | `20` | Rollout length (steps) |
-| `--dt` | `0.1` | Timestep (seconds) |
-| `--gamma` | `0.99` | Discount factor |
-| `--lam` | `0.95` | GAE decay parameter $\lambda$ |
+Default PPO settings are in `config.py`:
 
-**2. Regenerate the figures:**
+- Timesteps per sigma: `1,000,000`
+- Policy network: `64 -> 64`
+- Value network: `64 -> 64`
+- Activation: `Tanh`
+- `gamma = 0.99`
+- `gae_lambda = 0.95`
+- Seed: `0`
+
+Models are saved automatically under `models/`.
+
+For a quick smoke test:
+
+```bash
+python run_training.py --sigmas 0.0 0.1 --total-timesteps 5000
+```
+
+## Run Analysis
+
+After training, run:
+
+```bash
+python run_analysis.py
+```
+
+This writes:
+
+- `results/ppo_evaluation.csv`
+- `results/gae_bias.csv`
+- `results/fit_statistics.csv`
+- `results/model_residuals.csv`
+
+For faster analysis while debugging:
+
+```bash
+python run_analysis.py --sigmas 0.0 0.1 --eval-episodes 3 --gae-episodes 5
+```
+
+## Generate Figures
+
+`run_analysis.py` generates all plots automatically. You can regenerate figures
+from existing result CSVs with:
 
 ```bash
 python make_plots.py
 ```
 
-This writes `fig_mainfit.pdf`, `fig_loglog.pdf`, and `fig_residuals.pdf`
-(300 dpi, IEEE single-column width).
+Figures are saved in `figures/` as both PNG and PDF:
 
----
+- `fig_advantage_bias_vs_sigma`
+- `fig_ppo_return_vs_sigma`
+- `fig_advantage_bias_vs_return`
+- `fig_loglog_bias`
+- `fig_residual_analysis`
+- `fig_training_curves`
 
-## Expected output
+## Original Analytical Reproduction
 
-With the default settings you should obtain:
+The original paper-style numerical experiment is preserved:
 
-```
-Quadratic model: E[DeltaA] = 29.13 * sigma^2
-R^2 (through origin) = 0.9999
-log-log exponent     = 1.93
-p-value              = 1.51e-19
-C_emp / C_theo       = 2.4e-3   (bound valid but conservative)
-
-Critical thresholds:
-  sigma*(f=10%) = 0.023 m/s
-  sigma*(f=25%) = 0.037 m/s
+```bash
+python run_experiment.py
 ```
 
-The Riccati matrix has spectral norm $\|P\|_2 = 14.378$ and the LQR
-closed-loop spectral radius is $0.904$ (asymptotically stable). The DARE
-recursion converges to tolerance $10^{-12}$ in 141 iterations.
+The analytical script still writes its original text and CSV outputs:
 
----
+- `results_table.csv`
+- `regression_stats.txt`
+- `critical_threshold.txt`
+
+The pre-rendered analytical figures from the earlier repository remain in
+`figures/`. The updated `make_plots.py` is now dedicated to the PPO analysis
+CSVs produced by `run_analysis.py`.
 
 ## Citation
 
-If you use this code, please cite the paper:
+If you use this code, please cite:
 
 ```bibtex
 @article{patil2026quadratic,
   title   = {A Quadratic Bound on PPO Advantage Bias Under UAV Turbulence},
   author  = {Patil, Sahil and Kabir, Nasiruddin},
-  journal = {International Journal of Engineering Research \& Technology (IJERT)},
+  journal = {International Journal of Engineering Research & Technology (IJERT)},
   volume  = {15},
   number  = {05},
   year    = {2026}
 }
 ```
-
----
-
-## License
-
-Released under the MIT License. See `LICENSE` for details.
