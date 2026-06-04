@@ -140,7 +140,7 @@ If you use this code, please cite the paper:
 ```bibtex
 @article{patil2026quadratic,
   title   = {A Quadratic Bound on PPO Advantage Bias Under UAV Turbulence},
-  author  = {Patil, Sahil and Kabir, Nasiruddin},
+  author  = { Sahil Patil and  Nasiruddin Kabir},
   journal = {International Journal of Engineering Research \& Technology (IJERT)},
   volume  = {15},
   number  = {05},
