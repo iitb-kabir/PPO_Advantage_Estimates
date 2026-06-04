@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+
+# Generated experiment outputs
+results_table.csv
+regression_stats.txt
+critical_threshold.txt
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.synctex.gz
+paper_corrected.pdf
+
+# OS
+.DS_Store
