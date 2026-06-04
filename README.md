@@ -216,7 +216,7 @@ If you use this code, please cite:
 @article{patil2026quadratic,
   title   = {A Quadratic Bound on PPO Advantage Bias Under UAV Turbulence},
   author  = {Patil, Sahil and Kabir, Nasiruddin},
-  journal = {International Journal of Engineering Research & Technology (IJERT)},
+  journal = {International Journal of Engineering Research \& Technology (IJERT)},
   volume  = {15},
   number  = {05},
   year    = {2026}
