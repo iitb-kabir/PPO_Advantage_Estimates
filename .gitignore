@@ -26,3 +26,5 @@ paper_corrected.pdf
 
 # OS
 .DS_Store
+*.pdf
+*.png

@@ -14,6 +14,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sigmas", nargs="*", type=float, default=None)
     parser.add_argument(
+        "--seeds",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Random seeds, shared across all sigma. Default is 0 1 2 3 4.",
+    )
+    parser.add_argument(
         "--total-timesteps",
         type=int,
         default=None,
@@ -51,6 +58,7 @@ def main() -> None:
     )
     train_all_sigmas(
         sigmas=args.sigmas,
+        seeds=args.seeds,
         total_timesteps=args.total_timesteps,
         n_steps=args.n_steps,
         batch_size=args.batch_size,

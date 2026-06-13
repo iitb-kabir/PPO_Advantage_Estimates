@@ -79,6 +79,14 @@ class UAVTurbulenceEnv(gym.Env[np.ndarray, np.ndarray]):
         self.current_step = 0
         self.state = np.zeros(4, dtype=np.float32)
 
+        # Colored-turbulence (Dryden / Ornstein-Uhlenbeck) bookkeeping. The gust
+        # state is one scalar per independent noise channel. ``phi`` is the AR(1)
+        # retention factor for the configured correlation time.
+        self.turbulence_type = self.config.turbulence_type
+        self._noise_dim = 1 if self.E.ndim == 1 else int(self.E.shape[1])
+        self._dryden_phi = float(np.exp(-self.config.dt / max(self.config.dryden_tau, 1e-6)))
+        self._gust = np.zeros(self._noise_dim, dtype=np.float64)
+
         state_bound = np.full(4, np.finfo(np.float32).max, dtype=np.float32)
         self.observation_space = spaces.Box(-state_bound, state_bound, dtype=np.float32)
         action_bound = np.full(2, self.config.max_acceleration, dtype=np.float32)
@@ -106,7 +114,18 @@ class UAVTurbulenceEnv(gym.Env[np.ndarray, np.ndarray]):
                 size=4,
             ).astype(np.float32)
         self.current_step = 0
+        # Initialize the colored gust at its stationary distribution so there is
+        # no warm-up transient; white noise needs no state.
+        if self.turbulence_type == "dryden" and self.sigma > 0.0:
+            self._gust = self.np_random.normal(0.0, self.sigma, size=self._noise_dim)
+        else:
+            self._gust = np.zeros(self._noise_dim, dtype=np.float64)
         return self.state.copy(), {"sigma": self.sigma}
+
+    def set_sigma(self, sigma: float) -> None:
+        """Update the turbulence intensity in place (used by curriculum training)."""
+
+        self.sigma = float(sigma)
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         """Advance the UAV dynamics by one step."""
@@ -144,15 +163,25 @@ class UAVTurbulenceEnv(gym.Env[np.ndarray, np.ndarray]):
         return float(action.T @ self.R @ action)
 
     def _sample_disturbance(self) -> np.ndarray:
-        """Sample and shape Gaussian turbulence for the linear dynamics."""
+        """Sample and shape turbulence for the linear dynamics.
+
+        Supports i.i.d. Gaussian gusts (``turbulence_type="white"``) and a
+        first-order colored gust (``turbulence_type="dryden"``) whose stationary
+        standard deviation is ``sigma`` and correlation time is ``dryden_tau``.
+        """
 
         if self.sigma == 0.0:
             return np.zeros(4, dtype=np.float32)
+        if self.turbulence_type == "dryden":
+            innovation_scale = np.sqrt(max(0.0, 1.0 - self._dryden_phi**2)) * self.sigma
+            eta = self.np_random.normal(loc=0.0, scale=1.0, size=self._noise_dim)
+            self._gust = self._dryden_phi * self._gust + innovation_scale * eta
+            w = self._gust
+        else:
+            w = self.np_random.normal(loc=0.0, scale=self.sigma, size=self._noise_dim)
         if self.E.ndim == 1:
-            w = float(self.np_random.normal(loc=0.0, scale=self.sigma))
-            return (self.E * w).astype(np.float32)
-        w_vec = self.np_random.normal(loc=0.0, scale=self.sigma, size=self.E.shape[1])
-        return (self.E @ w_vec).astype(np.float32)
+            return (self.E * float(w[0])).astype(np.float32)
+        return (self.E @ w).astype(np.float32)
 
     def _diagnostics(self, action: np.ndarray, disturbance: np.ndarray) -> StepDiagnostics:
         """Build diagnostic information for the current transition."""

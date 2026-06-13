@@ -69,7 +69,14 @@ def plot_advantage_bias_vs_sigma(
 
     sigma = bias["sigma"].to_numpy(dtype=float)
     error = bias["mean_abs_advantage_error"].to_numpy(dtype=float)
-    std = bias.get("std_abs_advantage_error", pd.Series(np.zeros_like(error))).to_numpy(dtype=float)
+    # Prefer the across-seed 95% CI; fall back to the within-run std for
+    # backward compatibility with single-seed result tables.
+    if "mean_abs_advantage_error_ci95" in bias:
+        yerr = bias["mean_abs_advantage_error_ci95"].to_numpy(dtype=float)
+    else:
+        yerr = bias.get(
+            "std_abs_advantage_error", pd.Series(np.zeros_like(error))
+        ).to_numpy(dtype=float)
     c_bias = float(
         np.sum((sigma**2) * error) / np.sum(sigma**4)
         if np.sum(sigma**4) > 0
@@ -81,13 +88,13 @@ def plot_advantage_bias_vs_sigma(
     ax.errorbar(
         sigma,
         error,
-        yerr=std,
+        yerr=yerr,
         fmt="o",
         ms=4,
         capsize=2,
         color="black",
         ecolor="0.55",
-        label="Measured",
+        label="Measured (mean $\\pm$ 95% CI)",
     )
     ax.plot(xs, c_bias * xs**2, color="#1f5a8a", lw=1.7, label=rf"Fit $C\sigma^2$")
     r2 = np.nan
@@ -101,18 +108,23 @@ def plot_advantage_bias_vs_sigma(
     ax.legend(loc="upper left", fontsize=7.5)
     ax.grid(True, ls=":", lw=0.4, alpha=0.65)
     if np.isfinite(r2):
-        ax.text(0.04, 0.88, rf"$R^2={r2:.3f}$", transform=ax.transAxes)
+        ax.text(0.04, 0.70, rf"$R^2={r2:.3f}$", transform=ax.transAxes)
     save_figure(fig, config.figures_dir / "fig_advantage_bias_vs_sigma")
 
 
 def plot_return_vs_sigma(evaluation: pd.DataFrame, config: ExperimentConfig) -> None:
     """Plot PPO evaluation return against turbulence intensity."""
 
+    yerr = (
+        evaluation["return_ci95"]
+        if "return_ci95" in evaluation
+        else evaluation["std_episode_return"]
+    )
     fig, ax = plt.subplots(figsize=(3.7, 2.8))
     ax.errorbar(
         evaluation["sigma"],
         evaluation["average_episode_return"],
-        yerr=evaluation["std_episode_return"],
+        yerr=yerr,
         fmt="o-",
         lw=1.3,
         ms=4,
@@ -221,16 +233,19 @@ def plot_residual_analysis(residuals: pd.DataFrame, config: ExperimentConfig) ->
     save_figure(fig, config.figures_dir / "fig_residual_analysis")
 
 
-def load_training_curve(sigma: float, config: ExperimentConfig) -> pd.DataFrame | None:
-    """Load one SB3 training curve if it exists."""
+def load_training_curve(
+    sigma: float, config: ExperimentConfig, seed: int | None = None
+) -> pd.DataFrame | None:
+    """Load one SB3 training curve if it exists (uses the first seed by default)."""
 
-    progress_path = training_log_dir(sigma, config) / "progress.csv"
+    seed = config.seeds[0] if seed is None and config.seeds else seed
+    progress_path = training_log_dir(sigma, config, seed=seed) / "progress.csv"
     if progress_path.exists() and progress_path.stat().st_size > 0:
         frame = pd.read_csv(progress_path)
         if not frame.empty:
             frame["sigma"] = sigma
             return frame
-    metrics_path = config.results_dir / f"training_metrics_sigma_{sigma:.2f}.csv"
+    metrics_path = config.results_dir / f"training_metrics_sigma_{sigma:.2f}_seed{seed}.csv"
     if metrics_path.exists() and metrics_path.stat().st_size > 0:
         frame = pd.read_csv(metrics_path)
         if not frame.empty:
@@ -275,6 +290,84 @@ def plot_training_curves(config: ExperimentConfig) -> None:
     save_figure(fig, config.figures_dir / "fig_training_curves")
 
 
+def plot_robust_bias(bias: pd.DataFrame, config: ExperimentConfig) -> None:
+    """Plot mean vs median bias (with IQR) and the divergence rate."""
+
+    if "median_abs_advantage_error" not in bias or "frac_diverged" not in bias:
+        return
+    sigma = bias["sigma"].to_numpy(dtype=float)
+    mean = bias["mean_abs_advantage_error"].to_numpy(dtype=float)
+    median = bias["median_abs_advantage_error"].to_numpy(dtype=float)
+    iqr = bias["iqr_abs_advantage_error"].to_numpy(dtype=float)
+    frac = bias["frac_diverged"].to_numpy(dtype=float)
+    mask = sigma > 0.0
+
+    fig, ax = plt.subplots(figsize=(3.7, 2.8))
+    ax.semilogy(sigma[mask], np.maximum(mean[mask], 1e-6), "o-", lw=1.3, ms=4,
+                color="#1f5a8a", label="Mean")
+    ax.errorbar(sigma[mask], np.maximum(median[mask], 1e-6), yerr=iqr[mask],
+                fmt="s--", lw=1.1, ms=4, capsize=2, color="#b23a48",
+                ecolor="0.6", label="Median $\\pm$ IQR")
+    ax.set_xlabel(r"Turbulence intensity $\sigma$")
+    ax.set_ylabel("Absolute advantage error")
+    ax.legend(loc="upper left", fontsize=7.5)
+    ax.grid(True, which="both", ls=":", lw=0.4, alpha=0.65)
+
+    twin = ax.twinx()
+    twin.plot(sigma, frac, "^:", color="0.35", lw=1.0, ms=4, label="Diverged fraction")
+    twin.set_ylabel("Fraction of episodes diverged")
+    twin.set_ylim(-0.03, 1.03)
+    save_figure(fig, config.figures_dir / "fig_robust_bias")
+
+
+def plot_curriculum_comparison(config: ExperimentConfig) -> None:
+    """Bar chart comparing curriculum schedules at the deployment sigma."""
+
+    path = config.results_dir / "curriculum_eval.csv"
+    if not path.exists():
+        return
+    curriculum = pd.read_csv(path)
+    if curriculum.empty:
+        return
+    schedules = curriculum["schedule"].tolist()
+    x = np.arange(len(schedules))
+    eval_sigma = float(curriculum["eval_sigma"].iloc[0]) if "eval_sigma" in curriculum else np.nan
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+    axes[0].bar(
+        x,
+        curriculum["success_rate"],
+        yerr=curriculum.get("success_rate_ci95"),
+        capsize=3,
+        color="#2a7f62",
+        edgecolor="black",
+        linewidth=0.5,
+    )
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(schedules)
+    axes[0].set_ylabel("Success rate")
+    axes[0].set_ylim(0, 1.05)
+
+    axes[1].bar(
+        x,
+        curriculum["average_episode_return"],
+        yerr=curriculum.get("return_ci95"),
+        capsize=3,
+        color="#305f72",
+        edgecolor="black",
+        linewidth=0.5,
+    )
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(schedules)
+    axes[1].set_ylabel("Average episode return")
+
+    for ax in axes:
+        ax.grid(True, axis="y", ls=":", lw=0.4, alpha=0.65)
+    if np.isfinite(eval_sigma):
+        fig.suptitle(rf"Curriculum schedules evaluated at $\sigma={eval_sigma:.2f}$", fontsize=9)
+    save_figure(fig, config.figures_dir / "fig_curriculum_comparison")
+
+
 def generate_all_plots(config: ExperimentConfig = CONFIG) -> None:
     """Generate all requested figures."""
 
@@ -285,6 +378,8 @@ def generate_all_plots(config: ExperimentConfig = CONFIG) -> None:
     plot_bias_vs_return(bias, evaluation, config)
     plot_loglog_bias(bias, config)
     plot_residual_analysis(residuals, config)
+    plot_robust_bias(bias, config)
+    plot_curriculum_comparison(config)
     plot_training_curves(config)
 
 

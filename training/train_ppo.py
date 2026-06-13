@@ -95,14 +95,13 @@ def make_monitored_env(
 def create_ppo_model(
     sigma: float,
     config: ExperimentConfig = CONFIG,
-    seed_offset: int = 0,
+    seed: int = 0,
     n_steps: int | None = None,
     batch_size: int | None = None,
     n_epochs: int | None = None,
 ) -> PPO:
-    """Create a PPO model for one turbulence level."""
+    """Create a PPO model for one turbulence level and seed."""
 
-    seed = config.ppo.seed + seed_offset
     active_n_steps = n_steps or config.ppo.n_steps
     active_batch_size = batch_size or config.ppo.batch_size
     active_n_epochs = n_epochs or config.ppo.n_epochs
@@ -113,7 +112,7 @@ def create_ppo_model(
     if active_batch_size > active_n_steps:
         raise ValueError("PPO batch_size must be less than or equal to n_steps")
 
-    log_dir = training_log_dir(sigma, config)
+    log_dir = training_log_dir(sigma, config, seed=seed)
     log_dir.mkdir(parents=True, exist_ok=True)
     vec_env = make_vec_env(
         lambda: make_monitored_env(sigma, config, seed, log_dir),
@@ -152,21 +151,20 @@ def create_ppo_model(
 
 def train_single_sigma(
     sigma: float,
+    seed: int,
     config: ExperimentConfig = CONFIG,
     total_timesteps: int | None = None,
-    seed_offset: int = 0,
     n_steps: int | None = None,
     batch_size: int | None = None,
     n_epochs: int | None = None,
 ) -> Path:
-    """Train and save one PPO model for a turbulence level."""
+    """Train and save one PPO model for a turbulence level and seed."""
 
     config.ensure_directories()
-    seed = config.ppo.seed + seed_offset
     seed_everything(seed)
     active_total_timesteps = total_timesteps or config.ppo.total_timesteps
     active_n_steps = n_steps or config.ppo.n_steps
-    log_dir = training_log_dir(sigma, config)
+    log_dir = training_log_dir(sigma, config, seed=seed)
     checkpoint_dir = log_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -180,7 +178,7 @@ def train_single_sigma(
     model = create_ppo_model(
         sigma=sigma,
         config=config,
-        seed_offset=seed_offset,
+        seed=seed,
         n_steps=n_steps,
         batch_size=batch_size,
         n_epochs=n_epochs,
@@ -190,7 +188,7 @@ def train_single_sigma(
     checkpoint_callback = CheckpointCallback(
         save_freq=max(active_n_steps, 10_000),
         save_path=str(checkpoint_dir),
-        name_prefix=f"ppo_uav_sigma_{sigma:.2f}".replace(".", "_"),
+        name_prefix=f"ppo_uav_sigma_{sigma:.2f}_seed{seed}".replace(".", "_"),
         save_replay_buffer=False,
         save_vecnormalize=False,
     )
@@ -200,11 +198,13 @@ def train_single_sigma(
         progress_bar=True,
     )
 
-    output_path = model_path(sigma, config)
+    output_path = model_path(sigma, config, seed=seed)
     model.save(output_path)
     model.get_env().close()
 
-    metrics_path = config.results_dir / f"training_metrics_sigma_{sigma:.2f}.csv"
+    metrics_path = (
+        config.results_dir / f"training_metrics_sigma_{sigma:.2f}_seed{seed}.csv"
+    )
     pd.DataFrame(metrics_callback.rows).to_csv(metrics_path, index=False)
     LOGGER.info("Saved model to %s", output_path)
     LOGGER.info("Saved training metrics to %s", metrics_path)
@@ -214,27 +214,34 @@ def train_single_sigma(
 def train_all_sigmas(
     config: ExperimentConfig = CONFIG,
     sigmas: list[float] | None = None,
+    seeds: list[int] | None = None,
     total_timesteps: int | None = None,
     n_steps: int | None = None,
     batch_size: int | None = None,
     n_epochs: int | None = None,
 ) -> list[Path]:
-    """Train one PPO model for each requested turbulence level."""
+    """Train one PPO model for each (turbulence level, seed) combination.
+
+    The same seed set is shared across all turbulence levels so the seed is
+    decoupled from sigma, enabling mean +/- CI reporting downstream.
+    """
 
     targets = sigmas if sigmas is not None else list(config.sigmas)
+    active_seeds = seeds if seeds is not None else list(config.seeds)
     saved_paths: list[Path] = []
-    for index, sigma in enumerate(targets):
-        saved_paths.append(
-            train_single_sigma(
-                sigma=sigma,
-                config=config,
-                total_timesteps=total_timesteps,
-                seed_offset=index,
-                n_steps=n_steps,
-                batch_size=batch_size,
-                n_epochs=n_epochs,
+    for seed in active_seeds:
+        for sigma in targets:
+            saved_paths.append(
+                train_single_sigma(
+                    sigma=sigma,
+                    seed=seed,
+                    config=config,
+                    total_timesteps=total_timesteps,
+                    n_steps=n_steps,
+                    batch_size=batch_size,
+                    n_epochs=n_epochs,
+                )
             )
-        )
     return saved_paths
 
 
@@ -243,6 +250,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sigmas", nargs="*", type=float, default=None)
+    parser.add_argument("--seeds", nargs="*", type=int, default=None)
     parser.add_argument("--total-timesteps", type=int, default=None)
     parser.add_argument("--n-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -258,6 +266,7 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper()))
     train_all_sigmas(
         sigmas=args.sigmas,
+        seeds=args.seeds,
         total_timesteps=args.total_timesteps,
         n_steps=args.n_steps,
         batch_size=args.batch_size,
